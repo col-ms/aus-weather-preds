@@ -1,0 +1,12 @@
+ant wants to know frequency of back to back rain days
+
+rule of thumb for nn hidden layers: # should be roughyl 2/3 the num of inputs + num of outputs (2)
+
+additional option to explore for handling missing data:
+-identify variables with large amounts of missing data
+-drop vars from dataset (n rows unchanged)
+-find % of complete cases with new data (vars dropped)
+-if % is acceptable, build nn on na.omit(df) and compare accuracy to subset nn
+	-note: these models could be built separately, and compare/contrast the pros and cons of each
+	-maybe the subset data is more accurate, but is only useful for a smaller number of observations (location-restricted)
+	

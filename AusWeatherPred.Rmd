@@ -1,0 +1,571 @@
+---
+title: "STS 3130 Final: Will you need an Umbrella?"
+author: "Collin Smith"
+date: "11/19/2021"
+output: 
+  html_document:
+    fig_width: 9
+    fig_height: 6
+    toc: true
+    highlight: pygments
+---
+
+# Abstract
+
+In this project, we will be exploring a dataset containing 23 different variables pertaining to daily weather observations in various locations in Australia. The goal of the project is to build a neural network that predicts the value of the **RainTomorrow** variable. The data is roughly a decade of daily observations, with measurements such as Minimum Temperature, Maximum Temperature, amount of rainfall, the number of sunshine hours, humidity measurements, and indicators of whether or not it had rained that day as well as if it rained the following day. There is a fair bit of missing data in the dataset, a portion of the project is dedicated to investigating where data is missing and how to handle it. The performance of the neural network will be compared against that of a k-NN model using the exact same predictors. Comparison will primarily be between quantitative metrics of each method, such as accuracy, recall, and precision. However, there will be room in the discussion for non-numeric metrics of each method, such as ease of implementation and appropriate use-case.
+
+The dataset was retrieved from [this post](https://www.kaggle.com/jsphyg/weather-dataset-rattle-package).
+
+## Introductory Data Glimpse
+
+Importing libraries.
+
+```{r Libraries, message = F, warning = F}
+library(tidyverse)
+library(naniar)
+library(UpSetR)
+```
+
+Next, we will read in our data, and take a quick glance at the variables, their respective data types, as well as some of their values.    
+
+```{r Data Glimpse}
+weather <- read_csv("weatherAUS.csv", show_col_types = F) %>% arrange(Location, Date)
+glimpse(weather)
+```
+
+This shows that the data contains 145,460 observations of 23 variables. The names of the variables are rather informative, and easily interpretable. However, as shown in the **Cloud9am** and **Cloud3pm** columns, there is some missing data. This suggests that the data as a whole should be explored with the intention of finding and handling missing data, as not doing so could make fitting a model very challenging later on.
+
+```{r B2B Rain by Location, include = F, eval = F} 
+#unrelated to project
+
+b2b_rain <- weather %>% 
+  mutate(`2 Days Rain in a row` = ifelse(RainToday == "Yes" & RainTomorrow == "Yes", 1, 0)) %>%
+  aggregate(`2 Days Rain in a row` ~ Location, ., sum) %>%
+  bind_cols((weather %>% group_by(Location) %>% 
+              summarise(`Days Observed` = n())) %>% 
+              select(`Days Observed`))
+  
+write_csv(b2b_rain, "b2b_rain.csv")
+```
+
+
+# Missing Data Investigation
+
+## Importance of treating NA's
+
+In order to construct the best model, it is crucial to comb the working data for missing values, often coded as ``NA``. These values can cause trouble when it comes time to build a model, as the algorithm doesn't typically know how to handle instances where a value is expected but none is given. Granted, certain functions do come with arguments that can be set up to instruct the model on how to handle such occurrences, but those will not be used for the sake of this project. Instead, missing data will be methodically located and removed in a thoughtful and logical manner that should preserve the integrity of the data, keeping it suitable to use for building the model.
+
+## Exploratory Procedure
+
+```{r NA Plotting, warning = F, message = F}
+weather %>% select(-Date, -Location) %>% 
+  vis_miss(warn_large_data = F) +
+  scale_x_discrete(position = "bottom") +
+  coord_flip(expand = F) + 
+  labs(title = "Missing Data (NA's) by Variable") +
+  theme_bw() +
+  theme(legend.position = "right", 
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+```
+
+This plot shows there are large quantities of missing data in the **Cloud9am, Cloud3pm, Pressure3am, Pressure9pm, Sunshine,** and **Evaporation** variables. This presents a question of how to handle the missing data in regards to building and training the network. 
+
+# Remove Incomplete Observations
+
+## Overview
+
+In general, simply omitting rows that contain missing data is advisable only when doing so would eliminate a small proportion of the data. If the number of complete rows (rows with no ``NA``'s across all columns) $N$ is sufficiently large, say $N > 90\%$ of the dataset, it seems reasonable to simply exclude incomplete rows from the set. 
+
+This data set in particular contains a total of `r nrow(weather)` observations, of which `r sum(complete.cases(weather))`, or `r ((sum(complete.cases(weather)))/nrow(weather)) * 100`% of the rows are complete rows. As this value is less than the specified threshold listed above, a different method for dealing with the missing data would typically be more reasonable. However, for the sake of this purpose, a model will still be constructed using this method. Even though the proportion of complete cases is less than desirable, this method provides a quick way to get missing data out of the set and allows for more effort to be spent on the actual fitting, training, and assessment of the model.
+
+Another method, though not implemented in this project, would be to identify variables with an abnormally high percentage of missing data (judging from above plot, that would include **Evaporation, Cloud9am, Cloud3pm,** and **Sunshine**), remove these variables from the set, and then reassess the total number of complete cases.
+
+# Visualizations
+
+When exploring a dataset, visualizations are a great way to become more familiar with the contents of the set, and how variables relate to each other. These visual representations of the data aim to answer questions that might be helpful when implementing a machine learning algorithm.
+
+
+### Possible questions of interest:
+
+These questions force us to think about which variables might play a role in weather patterns.
+
+* When it rains one day, does it tend to rain the following day?
+* If a day sees a lot of rainfall, does the following day have a high chance of rain as well?
+* Is there any correlation between humidity and rainfall?
+  + What about between max temperature and rainfall? 
+    -  Min temperature and rainfall?
+
+
+#### When it rains one day, does it tend to rain the following day?
+
+```{r B2B-Rain}
+weather %>% na.omit() %>%
+  ggplot(aes(x = RainToday, fill = RainTomorrow)) +
+  geom_bar(position = "fill", width = 0.6, color = "black") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1),
+                     labels = scales::percent) +
+  labs(x = "Rained Today", y = "Percentage",
+       title = "Proportions of Consecutive Rain Days",
+       fill = "Rained the Next Day") +
+  theme_bw()
+```
+
+This plot tells us that when it rains one day, it is more likely to rain the following day. Information like this is extremely valuable because it tells us that the RainToday variable is directly related to the target variable RainTomorrow, and should absolutely be included in the network.
+
+
+#### If a day sees a lot of rainfall, does the following day have a high chance of rain as well?
+
+To accurately depict this data, the question will be divided into two plots. The first will only contain days that had between 3 and 50 mm on rainfall, and the second will contain days that had more than 50 mm of rainfall.
+
+```{r TargetByRainfall, warning = F}
+weather %>% na.omit() %>%
+  filter(Rainfall >= 3 & Rainfall <= 50) %>%
+  ggplot(aes(x = Rainfall, fill = RainTomorrow, color = RainTomorrow)) +
+  geom_histogram(aes(y = ((..count..))/sum(..count..)), alpha = 0.5, position = "identity") +
+  scale_y_continuous(breaks = seq(0, 0.2, 0.05), labels = scales::percent) +
+  labs(x = "Rainfall", y = "Percentage",
+       title = "Distribution of Rainfall (3 to 50 mm)") +
+  theme_bw()
+```
+
+As shown from the plot, it looks as though it becomes more likely that it would rain the next day on a day that sees more then ~7 mm of rainfall. This is a good start, but we still need to observe any patterns in days that see larger amounts of rainfall (50+ mm).
+
+```{r TargetByRainfall2, warning = F, message = F}
+weather %>% na.omit() %>%
+  filter(Rainfall > 50) %>%
+  ggplot(aes(x = Rainfall, fill = RainTomorrow, color = RainTomorrow)) +
+  geom_histogram(aes(y = ((..count..))/sum(..count..)), alpha = 0.5, position = "identity") +
+  scale_y_continuous(breaks = seq(0, 0.2, 0.05), labels = scales::percent) +
+  labs(x = "Rainfall", y = "Percentage",
+       title = "Distribution of Rainfall (3 to 50 mm)") +
+  theme_bw()
+```
+
+As expected, days that see larger amounts of rainfall are much more likely to have rain the following day as well. These observations likely represent storms, which supports this theory. Historically, storms don't tend to last just one day, and so it makes sense that rain on the following day would be expected. It is very possible that the observations in the plot that do not have rain the following day represent days on which a storm ended. Regardless, these plots tell us that rainfall certainly has a relationship with RainTomorrow, and that it would make sense to include it in our model.
+
+
+#### Is there any correlation between humidity and rainfall?
+
+```{r HumidityRainfall}
+weather %>% na.omit() %>%
+  ggplot(aes(x = Humidity9am, y = Rainfall, color = RainTomorrow)) +
+  geom_jitter(alpha = 0.7) + 
+  scale_x_continuous(breaks = seq(0, 100, 10)) +
+  scale_y_continuous(breaks = seq(0, 200, 10)) +
+  labs(x = "Humidity at 9am", y = "Rainfall (mm)",
+       title = "9am Humidity vs Rainfall Amount",
+       color = "Rain the Next Day?") +
+  theme_bw()
+```
+
+From this plot we can start to see a relationship form. It seems days that are more humid in the morning tend to see rain the following day. This suggests that Humidity9am should be kept for the model, but what about Humidity3pm? Let's find out if the trend holds true.
+
+```{r HumidityRainfall2}
+weather %>% na.omit() %>%
+  ggplot(aes(x = Humidity3pm, y = Rainfall, color = RainTomorrow)) +
+  geom_jitter(alpha = 0.7) + 
+  scale_x_continuous(breaks = seq(0, 100, 10)) +
+  scale_y_continuous(breaks = seq(0, 200, 10)) +
+  labs(x = "Humidity at 9am", y = "Rainfall (mm)",
+       title = "9am Humidity vs Rainfall Amount",
+       color = "Rain the Next Day?") +
+  theme_bw()
+```
+
+This confirms that the trend described above does indeed hold true for Humidity3pm. Based on these results, it is reasonable to say that both Humidity variables help to describe RainTomorrow, and thus will be part of the model. 
+
+
+#### Temperature and Rainfall
+
+```{r TempRain}
+weather %>% na.omit() %>%
+  ggplot(aes(x = MinTemp, y = Rainfall, color = RainTomorrow)) +
+  geom_point(alpha = 0.7) + 
+  scale_x_continuous(breaks = seq(-10, 100, 5)) +
+  scale_y_continuous(breaks = seq(0, 200, 10)) +
+  labs(x = "Minimum Temperature", y = "Rainfall (mm)",
+       title = "Minimum Temperature (Celsius) vs Rainfall Amount",
+       color = "Rain the Next Day?") +
+  theme_bw()
+```
+
+```{r TempRain2}
+weather %>% na.omit() %>%
+  ggplot(aes(x = MaxTemp, y = Rainfall, color = RainTomorrow)) +
+  geom_point(alpha = 0.7) + 
+  scale_x_continuous(breaks = seq(0, 100, 5)) +
+  scale_y_continuous(breaks = seq(0, 200, 10)) +
+  labs(x = "Maximum Temperature", y = "Rainfall (mm)",
+       title = "Maximum Temperature (Celsius) vs Rainfall Amount",
+       color = "Rain the Next Day?") +
+  theme_bw()
+```
+
+These plots depict the relationship between a days minimum/maximum temperature and the amount of rainfall observed on that day. Compared to the plots generated for a days humidity measurements, these plots do not show a clear relationship or trend. We can observe that if a days maximum temperature exceeds ~38 degrees Celsius, it is very unlikely that it will rain the next day. This information will be used to say that MinTemp does not contribute much towards predicting the target response, and will not be included in the model. However, as discussed, MaxTemp does have a small relation, so it will be included.
+
+
+### Exploring Variable Correlations
+
+Now that we have done a bit of data exploration and visualization, leading to some important decisions regarding which variables to keep and exclude, we should take a look at the correlations between our already explored variables and other possible explanatory variables in the dataset. If we see that a variable has a high correlation with one that we have already decided should remain in the model, chances are it will not add much and can safely be removed without negatively impacting the results of the model.
+
+```{r CorrExplore}
+library(corrplot)
+corrs <- weather %>% na.omit() %>% select_if(is.numeric) %>% cor()
+corrplot(corrs, method = 'square', order = 'hclust', addrect = 4)
+```
+
+Looking specifically at the rows corresponding to our already selected variables **Rainfall, Humidity9am, Humidity3pm,** and **MaxTemp**, we can see there is quite a bit of high correlation. 
+
+**MaxTemp** in particular has very high positive correlation with **Evaporation, Temp3pm, MinTemp,** and **Temp9am**. **MaxTemp** also shows relatively strong negative correlations with **Pressure9am** and **Pressure3pm**. We will keep the lesser correlated option of these two, **Pressure9am**. 
+
+**Humidity3pm** shows extremely high negative correlation with **Sunshine**, so **Sunshine** will be dropped from the model as well. There is also evidence of very high positive correlations between **Humidity3pm** and **Cloud9am** and **Cloud3pm**. These two variables will also not be considered in the model. 
+
+Lastly, we can see that none of our previously selected variables have high correlations with variables beginning with **"Wind"**, located in the top left of the plot. Since all three variables relating to that measurement are highly correlated, we can select one of them and include that in the model. Let's select **WindSpeed3pm** as not only does it have the lowest correlations with our other selections, but it makes the most sense from a practical standpoint. If a day's wind speed started to pick up later in the day, it seems reasonable to assume that it could indicate the presence of a growing storm nearby. 
+
+All in all, our numeric variables that will be considered in the model are **MaxTemp, Humidity9am, Humidity3pm, Rainfall, WindSpeed3pm,** and **Pressure9am**.
+
+# Neural Network 
+
+## Background
+
+Neural networks, often associated with deep learning and image recognition, are a machine learning algorithm that is often thought of as an abstract method with complex details. While adjusting the parameters of a network to optimize it may be a complex task, the core concept at work is relatively simple.
+
+Neural networks are based on the architecture of the human nervous system, which is made up of a series of interconnected neurons that relay information to each other. A neural network (NN) borrows this structure to create predictions based on the information passed through various neurons. 
+
+NN's consist of two major components -- **nodes** or **neurons**, which act as I/O devices for information, and **layers**, which are groups of nodes.
+
+The basic structure of a NN can be thought of as a series of 3 distinct layers. The first layer, called the *Input Layer*, is a series of nodes that correspond to the explanatory variables in the model. The second layer, called the *Hidden Layer* are the meat of the NN. These hidden layers are layers of 1 or more nodes that receive input from each node in the preceding layer. A NN must have at least 1 hidden layer, and while there is not theoretical maximum number of hidden layers, there is little reason to include more than 1 or 2 in most applications. The last layer is called the *Output Layer*. This is where the predictions generated by the network are sent. In regression problems, there is typically only one node in this layer. In classification problems, there may be a node for each possible class, or there may be $N$ nodes where $N =\ Number\ of\ Classes - 1$. For example, in binary classification, like this project, there is a single output node that contains the probability that a prediction belongs to a certain "success" (Probability = 1) class.
+
+Each input node is assigned a *weight* to which the input value is multiplied before being passed to a node in the following layer. Nodes in the hidden layers receive a similar treatment called a *bias*. This bias is then added to the sum of all the (weight * input) products fed into that node. Once the bias has been added, the final value is passed to something called an *activation function*. This is a function that defines and transforms the output of a node and are the characteristic that gives NN's their non-linearity. There are various candidates for a networks activation function, most of which can be found [here](https://en.wikipedia.org/wiki/Activation_function). 
+
+![Structure of a Node/Neuron](node_explain.png)
+
+[Source](https://www.datacamp.com/community/tutorials/neural-network-models-r)
+
+A NN learns and improves its predictions by adjusting the weights and biases of each input and node. Using a specified (or default) *Error Function*, the NN is able to assign an error value to the predictions made using the current weights and biases in the network. The network then uses partial derivatives to assess the impact that any given weight or bias had on the calculated error. Once these values are found, the NN will begin to adjust the weights and biases in order to minimize the value of the error function. Once iterations of this process have been run back to back with minimal change in the error function, the NN stops the loop and is considered to be trained. [Source](https://towardsdatascience.com/understanding-backpropagation-algorithm-7bb3aa2f95fd).
+
+## Implementation
+
+Libraries required for network.
+
+```{r NN-Libs, message = F}
+library(caret)
+library(neuralnet)
+```
+
+### Data Prep
+```{r Method-1 Data Prep}
+m1_data <- weather %>% na.omit() %>%
+  select(-WindGustSpeed, -WindSpeed9am, -MinTemp, -Sunshine, -Evaporation, -Temp9am, -Temp3pm,
+         -Pressure3pm, -Cloud9am, -Cloud3pm)
+```
+
+Dropping any incomplete rows from the original data yields a new dataset of `r nrow(m1_data)` observations. However, as shown in the initial data glimpse, many of the variables in the set are non-numeric. This sort of data can be difficult to implement in a neural network, leading us to feature selection.
+
+
+### Feature Selection
+
+To begin, the character data variables are converted to factors. 
+
+```{r FactorConvert}
+m1_data <- m1_data %>% mutate_if(is.character, factor)
+glimpse(m1_data)
+m1_data %>% select_if(is.factor) %>% sapply(levels)
+```
+
+From this output it is clear that while the variables have successfully been converted to factors, many of these factors can take on many levels. In particular, the **Location, WindGustDir, WindDir9am,** and **WindDir3pm** variables have several possible levels. This would not be so much of an issue if the factors were leveled, in that there was some sort of numeric progression that could be assigned to them, but that is not the case. Due to these unique properties, implementing these variables would prove to be rather difficult, and so they will not be considered in the model. **Date** will also be dropped.
+
+```{r DropFactors}
+m1_data <- m1_data %>% select(-Location, -WindGustDir, -WindDir9am, -WindDir3pm, -Date)
+
+glimpse(m1_data)
+```
+
+After dropping those variables, only numeric values and binary (*2 level*) factors remain. These variables are suitable for constructing a neural network.
+
+The final data preparation step is scaling the data. This is done to ensure that numeric variables with higher overall values are not given a higher weight within the network. In short, scaling the data such that each variable has a mean of 0 and variance of 1 ensures that each input carries the same initial weight into the network.
+
+```{r Scaling}
+m1_data <- m1_data %>%
+  mutate_if(is.numeric, scale) %>%
+  mutate(RainToday = as.numeric(RainToday) - 1,
+         RainTomorrow = as.numeric(RainTomorrow) - 1) #encodes binary factor to 0 (no rain) or 1 (rain)
+```
+
+### Testing and Training Split
+
+To construct and assess the network, the data will be partitioned into two sets -- a *training* set, used to fit and teach the network, and a *testing* set, used to assess the networks response to new data. For this project, an 80/20 split will be used, meaning that 80% of the data will be going into the training set, and 20% will be excluded to use in the testing set. Observations selected for the training set are chosen at random.
+
+```{r TestTrainSplit}
+set.seed(404)
+train.inds <- sample(1:nrow(m1_data), floor(0.8*nrow(m1_data)))
+set.seed(NULL)
+
+m1.train <- m1_data[train.inds,]
+m1.test <- m1_data[-train.inds,]
+```
+
+Now that the data has been split, it is time to construct the neural network. 
+
+### Fitting Network
+
+To build the neural network, the function ``neuralnet`` from package **neuralnet** is used. The arguments included in the function specify that **RainTomorrow** is the target response variable, and the following ``~ .`` indicates that all other variables in the dataset should be considered as inputs. The ``neuralnet`` function includes various default arguments, all of which were left unchanged for the purpose of this project. More information about the function's arguments and their default values, and meanings, can be found by running ``?neuralnet`` in the R console, or can be read [here](https://www.rdocumentation.org/packages/neuralnet/versions/1.44.2/topics/neuralnet).
+
+*Note: Experiments regarding changing the number of hidden layers, the number of nodes, as well as the algorithm used to train the model were explored. Nearly every change resulted in much longer fitting run-times with no repeatable increases to the overall accuracy of the network. Thus, the default options were selected.*
+
+```{r NN-Fit}
+set.seed(777)
+nn.mod <- neuralnet(RainTomorrow ~ ., data = m1.train)
+nn.mod$result.matrix
+set.seed(NULL)
+```
+
+## Assessing Network
+
+The following is a function for visualizing an object created by the **caret** library's ``confusionMatrix()`` function. I did not write this code, it was found [in this post](https://www.reddit.com/r/rstats/comments/c6lvg0/confusion_matrix_caret_plotting_superior_to_base/).
+
+```{r cfm-print-function}
+draw_confusion_matrix <- function(cmtrx) {
+
+total <- sum(cmtrx$table)
+
+res <- as.numeric(cmtrx$table)
+
+# Generate color gradients. Palettes come from RColorBrewer.
+
+greenPalette <- c("#F7FCF5","#E5F5E0","#C7E9C0","#A1D99B","#74C476","#41AB5D","#238B45","#006D2C","#00441B")
+
+redPalette <- c("#FFF5F0","#FEE0D2","#FCBBA1","#FC9272","#FB6A4A","#EF3B2C","#CB181D","#A50F15","#67000D")
+
+getColor <- function (greenOrRed = "green", amount = 0) {
+
+if (amount == 0)
+
+return("#FFFFFF")
+
+palette <- greenPalette
+
+if (greenOrRed == "red")
+
+palette <- redPalette
+
+colorRampPalette(palette)(100)[10 + ceiling(90 * amount / total)]
+
+}
+
+# set the basic layout
+
+layout(matrix(c(1,1,2)))
+
+par(mar=c(2,2,2,2))
+
+plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
+
+title('CONFUSION MATRIX', cex.main=2)
+
+# create the matrix
+
+classes = colnames(cmtrx$table)
+
+rect(150, 430, 240, 370, col=getColor("green", res[1]))
+
+text(195, 435, classes[1], cex=1.2)
+
+rect(250, 430, 340, 370, col=getColor("red", res[3]))
+
+text(295, 435, classes[2], cex=1.2)
+
+text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)
+
+text(245, 450, 'Actual', cex=1.3, font=2)
+
+rect(150, 305, 240, 365, col=getColor("red", res[2]))
+
+rect(250, 305, 340, 365, col=getColor("green", res[4]))
+
+text(140, 400, classes[1], cex=1.2, srt=90)
+
+text(140, 335, classes[2], cex=1.2, srt=90)
+
+# add in the cmtrx results
+
+text(195, 400, res[1], cex=1.6, font=2, col='white')
+
+text(195, 335, res[2], cex=1.6, font=2, col='white')
+
+text(295, 400, res[3], cex=1.6, font=2, col='white')
+
+text(295, 335, res[4], cex=1.6, font=2, col='white')
+
+# add in the specifics
+
+plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "DETAILS", xaxt='n', yaxt='n')
+
+text(10, 85, names(cmtrx$byClass[1]), cex=1.2, font=2)
+
+text(10, 70, round(as.numeric(cmtrx$byClass[1]), 3), cex=1.2)
+
+text(30, 85, names(cmtrx$byClass[2]), cex=1.2, font=2)
+
+text(30, 70, round(as.numeric(cmtrx$byClass[2]), 3), cex=1.2)
+
+text(50, 85, names(cmtrx$byClass[5]), cex=1.2, font=2)
+
+text(50, 70, round(as.numeric(cmtrx$byClass[5]), 3), cex=1.2)
+
+text(70, 85, names(cmtrx$byClass[6]), cex=1.2, font=2)
+
+text(70, 70, round(as.numeric(cmtrx$byClass[6]), 3), cex=1.2)
+
+text(90, 85, names(cmtrx$byClass[7]), cex=1.2, font=2)
+
+text(90, 70, round(as.numeric(cmtrx$byClass[7]), 3), cex=1.2)
+
+# add in the accuracy information
+
+text(30, 35, names(cmtrx$overall[1]), cex=1.5, font=2)
+
+text(30, 20, round(as.numeric(cmtrx$overall[1]), 3), cex=1.4)
+
+text(70, 35, names(cmtrx$overall[2]), cex=1.5, font=2)
+
+text(70, 20, round(as.numeric(cmtrx$overall[2]), 3), cex=1.4)
+
+}
+```
+
+### Generating Predictions
+
+Predictions are made using the testing set, and a confusion matrix is created. As the predictions are created as probabilities, a classification threshold of 0.5 is used to assign class values to each prediction. This is implemented by passing the predictions to the ``round()`` function.
+
+```{r Predictions}
+nn.preds <- predict(nn.mod, m1.test) %>% round()
+```
+
+### Results and Metrics
+
+```{r Metrics}
+actual <- factor(ifelse(m1.test$RainTomorrow == 1, "Yes", "No"))
+predicted <- factor(ifelse(nn.preds == 1, "Yes", "No"))
+
+nn.cfm <- confusionMatrix(actual, predicted)
+nn.cfm
+draw_confusion_matrix(nn.cfm)
+```
+
+
+# k-NN Implementation
+
+Libraries required for model building.
+
+```{r kNN-Libs}
+library(FNN)
+```
+
+## Preparations
+
+To keep comparisons fair, the dataset used to construct the neural network will be used to fit all subsequent models. This comes with the added benefit of working with already-scaled data.
+
+```{r kNN-Data-Prep}
+knn.data <- m1_data
+```
+
+Additionally, the testing and training split will be conducted using the same indices as before.
+
+```{r knn-TestTrain-Split}
+knn.train <- knn.data[train.inds,]
+knn.test <- knn.data[-train.inds,]
+```
+
+### Finding Optimal k Procedure
+
+To find the optimal value of **k**, the model construction will be looped 50 times, with k-values ranging from 0 to 50. The overall accuracy of each model will be calculated and stored in a vector, then plotted to allow for easy visualization of the optimal k-value. The metrics obtained from that specific model will be used for comparisons.
+
+```{r kNN-prep}
+k <- 50
+knn.acc <- rep(NA, k)
+inputs <- names(knn.data)[-length(names(knn.data))]
+```
+
+## Fitting Model
+
+To allow for consistent and repeatable results, a seed of 777 will be set prior to fitting the models.
+
+```{r kNN-ModCycle} 
+set.seed(777)
+for(i in 1:k){
+  mod.cycle <- knn(train = knn.train[,inputs], test = knn.test[,inputs], 
+                   cl = knn.train$RainTomorrow, k = i)
+  knn.acc[i] <- sum(mod.cycle == knn.test$RainTomorrow)/nrow(knn.test)
+}
+set.seed(NULL)
+```
+
+## Assessing Model
+
+#### Choosing k
+
+```{r PlotResults}
+knn.info <- as.data.frame(cbind(knn.acc, 1:k)); names(knn.info) <- c("acc", "k")
+
+knn.info %>% mutate(isMax = ifelse(acc == max(knn.info$acc), T, F)) %>%
+  ggplot(aes(k, acc)) + 
+  geom_line(aes(group = 1), size = 0.75, alpha = 0.5) + 
+  geom_point(aes(color = isMax), size = 1.5) +
+  labs(x = "k-Value", y = "Model Accuracy", title = "Accuracy by K-Value") +
+  scale_y_continuous(breaks = seq(0.8, 0.86, by = 0.01), labels = scales::percent) +
+  theme_bw() + theme(legend.position = 'none')
+```
+
+Based on the results shown above, the optimal k-value is **`r which.max(knn.info$acc)`**. Thus, a model using k = `r which.max(knn.info$acc)` will be fit and used for comparisons. Predictions will be used to create a confusion matrix.
+
+#### Predictions and Metrics
+
+```{r kNN-BestMod}
+set.seed(777)
+knn.mod <- knn(train = knn.train[,inputs], test = knn.test[,inputs], 
+               cl = knn.train$RainTomorrow, k = which.max(knn.info$acc))
+
+knn.predicted <- factor(ifelse(knn.mod == 1, "Yes", "No"))
+knn.cfm <- confusionMatrix(actual, knn.predicted)
+knn.cfm
+draw_confusion_matrix(knn.cfm)
+```
+
+# Comparison and Discussion
+
+Now that both methods have had their models fit and predictions have been made, we can compare the results of each as well as the process that led us to said results.
+
+## Quantitative Performance
+
+The performance metrics of the two models are as follows:
+```{r}
+tibble(
+  metric = names(nn.cfm$overall), 
+  nn.vals = nn.cfm$overall, 
+  knn.vals = knn.cfm$overall
+)
+```
+
+As we can see, these metrics are extremely close in value. The most obvious result to use as a comparison is model accuracy, as that value gives the best overall performance summary of the model. In essence, accuracy answers the question of "How often will this model be right?" Obviously, it is natural to want to immediately select the higher number here. While I do think basing the decision off of that alone would still lead to the better choice in this scenario, it is important to understand the relevance of the other figures produced here. Note that while the accuracy of the k-NN model is about 0.3% higher, this performance delta is also present in the confidence intervals calculated for each model. The *AccuracyLower* and *AccuracyUpper* values represent the lower and upper bounds, respectively, of the 95% CI for accuracy produced by each model. These values tell us that the higher accuracy produced by the k-NN model here was not a fluke. If we were to re-conduct this comparison a large number of times, 95% of the time the k-NN model's accuracy would be higher. This tells us that the k-NN model will consistently perform better than the neural network, and that we are not simply observing an unlikely scenario here. Based on these values, I would already be leaning towards saying the k-NN model is the better choice.
+
+## Qualitative Assessment
+
+In this section, I would like to further break down why I think the k-NN model is the better choice here. Neural networks are highly regarded for their ability to comprehend and make use of non-linear data. They are typically the go-to algorithm for such applications. However, as depicted in the visualizations section, much of this data is linearly separable, at least to a reasonable degree. This characteristic of the data means that methods we have already explored, such as k-NN, are likely going to make much more sense for this sort of use-case. Many of the methods we have discussed in class excel at making predictions from linear data, and can do so in a manner that is fast, easy to implement, and easy to understand. While I recognize that working with the k-NN model will certainly be easier largely in part due to the fact that we have used it in class, I think that this dataset is better suited to be used with that model regardless of user experience. Neural networks are a much better option when simpler alternatives, like k-NN, will not be able to perform well. That is not the case here, which to me makes the k-NN model a better option.
+
+### Room for Improvement
+
+When trying to implement the neural network, I ran into a multitude of issues. These issues could have certainly been due to the data not being in a suitable form to pass to the function, but more likely is that the issue was simply a lack of experience with the method. Regardless, the dataset I chose came with many variables that were non-numeric. Neural networks, or at least my experience with them, does not allow for methods in which character data can be passed as an input. Thus, I needed to convert the character data to factors, of which many had a great multitude of levels. The function and package I chose to work with did not natively support the parsing of factors in the input formula, and the variables simply had too many levels to create indicator variables for. Sure, it would be possible, but I thought that doing so would simply saturate the network with far too many inputs. These issues are the sort of problems that do not have a single correct solution, and I tried to explain each decision throughout the process in the project, as well as why I made the choices I did. 
+
+# References
+
+<div class="csl-bib-body" style="line-height: 2; margin-left: 2em; text-indent:-2em;">
+<div classname="csl-entry">  <div class="csl-entry">“Activation Function.” <i>Wikipedia</i>, 14 Dec. 2021. <i>Wikipedia</i>, https://en.wikipedia.org/w/index.php?title=Activation_function&amp;oldid=1060287703.</div>
+</div><div classname="csl-entry">  <div class="csl-entry"><i>Cheatsheets</i>. https://rmarkdown.rstudio.com/lesson-15.HTML.</div>
+</div><div classname="csl-entry">  <div class="csl-entry">Gurney, Kevin. <i>An Introduction to Neural Networks</i>.</div>
+</div><div classname="csl-entry">  <div class="csl-entry">Kostadinov, Simeon. “Understanding Backpropagation Algorithm.” <i>Medium</i>, 12 Aug. 2019, https://towardsdatascience.com/understanding-backpropagation-algorithm-7bb3aa2f95fd.</div>
+</div><div classname="csl-entry">  <div class="csl-entry"><i>Neuralnet Function - RDocumentation</i>. https://www.rdocumentation.org/packages/neuralnet/versions/1.44.2/topics/neuralnet.</div>
+</div><div classname="csl-entry">  <div class="csl-entry"><i>Rain in Australia</i>. https://kaggle.com/jsphyg/weather-dataset-rattle-package.</div>
+</div></div>

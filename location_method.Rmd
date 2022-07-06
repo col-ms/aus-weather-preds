@@ -1,0 +1,84 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+# Method 2: Choose Cleaner Subsets
+
+## Overview
+
+The second method for handling this amount of missing data is to operate on a subset of the data. That is, identify groups within the data that have a higher percentage of complete cases, and shift the focus to instead work with this new subset. There is a major downside that comes with such a procedure, in that the model built will no longer represent the entire data set. One way to execute such a procedure would be to split the original data in some logical manner, and investigate the purity of the data within each section. Once desirable sections are identified, those sections can be grouped back together and treated as the new data set. In this case, it seems logical to split the data by location, and choose to operate on a subset that contains a higher percentage of complete cases. As previously mentioned, this does mean that the model will not represent, or be applicable to the locations that were omitted. However, the model trained using the remaining data will likely be more accurate, and thus useful, for the locations that made the cut. This is a trade-off that should be weighed on a case-by-case basis, as their are many factors that would influence such a decision.
+
+
+<font size = "1"> *Note that these methods were chosen largely due to this project being a first dive into Neural Networks (NN). The general thought process behind this procedure is that it will be easier and more manageable to build an NN on a smaller data set and understand the behind-the-scenes calculations that are taking place. Another solution could be to utilize methods to analyze trends and relationships in the missing data, and use these patterns to make an attempt to fill in the missing data with predicted values.* </font>
+
+## Identifying Top Candidates
+
+To select the best candidate locations to build the model on, the percentage of missing values per variable is observed for each Location. Additionally, the quantity of records pertaining to a particular location is displayed. This is done to ensure that a Location that with a desirable % of missing data also has enough records to fit the model.
+
+```{r NA Plot, warning = F}
+gg_miss_fct(weather, Location) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+Based on the above plot, the high proportions of missing data are mostly clustered within the same location values. That is ideal, as it means that sub-setting the full data set and choosing to keep only records pertaining to locations with low % of missing values will be a much cleaner process. 
+
+It appears the top 10 locations with the cleanest data (most purple rectangles) are **Brisbane, Darwin, MelbourneAirport, Mildura, NorfolkIsland, Perth, PerthAirport, SydneyAirport, Townsville,** and **Watsonia**. To confirm these observations, the table below can be used. Setting the "Show" option to 10 and sorting by TotalNAs confirms that these locations are correct. The table also gives information about the number of records per location. These values look promising, as all are above 3000 and should provide enough data to properly fit the model. 
+
+```{r NA per Location Table}
+location.info <- weather %>% 
+  group_by(Location) %>% 
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  mutate(TotalNAs = rowSums(.[,-1])) %>% 
+  select(c("Location", "TotalNAs")) %>%
+  bind_cols((weather %>% group_by(Location) %>% 
+              summarise(CountRecords = n())) %>% 
+              select(CountRecords))
+
+datatable(location.info)
+```
+
+## Assessing NAs in Subset
+
+```{r Filtered data NA by Location}
+best.locs <- location.info %>% arrange(TotalNAs) %>% 
+  head(10) %>% .$Location
+
+aus.sub <- filter(weather, Location %in% best.locs)
+
+gg_miss_fct(aus.sub, Location)
+```
+
+```{r Filtered Data NA Plot}
+aus.sub %>% select(-Date, -Location) %>% 
+  vis_miss(warn_large_data = F) +
+  scale_x_discrete(position = "bottom") +
+  coord_flip(expand = F) + 
+  labs(title = "Missing Data (NA's) by Variable") +
+  theme_bw() +
+  theme(legend.position = "right", axis.text.x = element_blank())
+```
+
+Shown by the above plot, there is far less missing data in the filtered data set than in the full set. The percentage of complete records in the new set is `r paste0((sum(complete.cases(aus.sub)/nrow(aus.sub) * 100)), "%")`. This proportion is large enough that simply excluding any rows containing missing data will still provide a set that is a close enough approximation to be useful.
+
+## Data Prep
+
+```{r Data Prep}
+normData <- function(x) {x = (x - min(x))/(max(x) - min(x))}
+
+aus.sub <- aus.sub %>% na.omit() %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate_if(is.numeric, normData)
+```
+
+```{r 80-20 Split and NN Fitting, results = 'hide', warning = F, message = F}
+set.seed(300)
+inds <- sample(1:nrow(aus.sub), floor(0.8*nrow(aus.sub)))
+
+train <- aus.sub[inds,]
+test <- aus.sub[-inds,]
+
+#nn.mod <- train(x = train[,-23], y = train$RainTomorrow, method = "nnet",
+#                trControl = trainControl(method = "repeatedcv", number = 10, repeats = 5))
+set.seed(NULL)
+```

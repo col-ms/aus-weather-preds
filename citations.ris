@@ -1,0 +1,54 @@
+TY  - BOOK
+TI  - An Introduction to Neural Networks
+AU  - Gurney, Kevin
+AB  - Though mathematical ideas underpin the study of neural networks, the author presents the fundamentals without the full mathematical apparatus. All aspects of the field are tackled, including artificial neurons as models of their real counterparts; the geometry of network action in pattern space; gradient descent methods, including back-propagation; associative memory and Hopfield nets; and self-organization and feature maps. The traditionally difficult topic of adaptive resonance theory is clarified within a hierarchical description of its operation. The book also includes several real-world examples to provide a concrete focus. This should enhance its appeal to those involved in the design, construction and management of networks in commercial environments and who wish to improve their understanding of network simulator packages. As a comprehensive and highly accessible introduction to one of the most important topics in cognitive and computer science, this volume should interest a wide range of readers, both students and professionals, in cognitive science, psychology, computer science and electrical engineering.
+ER  - 
+
+TY  - ELEC
+TI  - Rain in Australia
+AB  - Predict next-day rain in Australia
+LA  - en
+UR  - https://kaggle.com/jsphyg/weather-dataset-rattle-package
+ER  - 
+
+TY  - ELEC
+TI  - Cheatsheets
+AB  - Turn your analyses into high quality documents, reports, presentations and dashboards with R Markdown. Use a productive notebook interface to weave together narrative text and code to produce elegantly formatted output. Use multiple languages including R, Python, and SQL. R Markdown supports a reproducible workflow for dozens of static and dynamic output formats including HTML, PDF, MS Word, Beamer, HTML5 slides, Tufte-style handouts, books, dashboards, shiny applications, scientific articles, websites, and more.
+UR  - https://rmarkdown.rstudio.com/lesson-15.HTML
+ER  - 
+
+TY  - ELEC
+TI  - neuralnet function - RDocumentation
+AB  - <p>Train neural networks using backpropagation,
+resilient backpropagation (RPROP) with (Riedmiller, 1994) or without weight
+backtracking (Riedmiller and Braun, 1993) or the modified globally
+convergent version (GRPROP) by Anastasiadis et al. (2005). The function
+allows flexible settings through custom-choice of error and activation
+function. Furthermore, the calculation of generalized weights (Intrator O.
+and Intrator N., 1993) is implemented.</p>
+UR  - https://www.rdocumentation.org/packages/neuralnet/versions/1.44.2/topics/neuralnet
+ER  - 
+
+TY  - ELEC
+TI  - Understanding Backpropagation Algorithm
+AU  - Kostadinov, Simeon
+T2  - Medium
+AB  - Learn the nuts and bolts of a neural network’s most important ingredient
+DA  - 2019/08/12/T23:47:35.648Z
+PY  - 2019
+LA  - en
+UR  - https://towardsdatascience.com/understanding-backpropagation-algorithm-7bb3aa2f95fd
+ER  - 
+
+TY  - ENCYC
+TI  - Activation function
+T2  - Wikipedia
+AB  - In artificial neural networks, the activation function of a node defines the output of that node given an input or set of inputs. 
+A standard integrated circuit can be seen as a digital network of activation functions that can be "ON" (1) or "OFF" (0), depending on input. This is similar to the linear perceptron in neural networks. However, only nonlinear activation functions allow such networks to compute nontrivial problems using only a small number of nodes, and such activation functions are called nonlinearities. An extensive list of activation functions including many new promising alternate activation functions that have been shown to perform better than popular activation functions on benchmark problems is presented in.
+DA  - 2021/12/14/T15:46:53Z
+PY  - 2021
+DP  - Wikipedia
+LA  - en
+UR  - https://en.wikipedia.org/w/index.php?title=Activation_function&oldid=1060287703
+ER  - 
+
